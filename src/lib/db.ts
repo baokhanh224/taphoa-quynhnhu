@@ -24,20 +24,18 @@ if (process.env.NODE_ENV !== 'production') globalForStore.memoryStore = memorySt
 
 // Check if PostgreSQL is available
 export async function isPostgresAvailable(): Promise<boolean> {
-  if (globalForStore.hasPostgres !== undefined) {
-    return globalForStore.hasPostgres;
-  }
   if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('localhost:5432')) {
-    globalForStore.hasPostgres = false;
     return false;
   }
+  if (globalForStore.hasPostgres === true) {
+    return true;
+  }
   try {
-    // Quick probe
+    // Quick probe (handles Neon serverless cold start wakeup)
     await prisma.$queryRaw`SELECT 1`;
     globalForStore.hasPostgres = true;
     return true;
   } catch (err) {
-    globalForStore.hasPostgres = false;
     return false;
   }
 }
@@ -49,6 +47,7 @@ export async function resetDatabase(): Promise<void> {
     const s = generateSampleData();
     await prisma.$transaction(async (tx) => {
       // Clear all in reverse dependency order
+      await tx.idempotencyKey.deleteMany({});
       await tx.phanBoXuatKho.deleteMany({});
       await tx.chiTietDoiTra.deleteMany({});
       await tx.phieuDoiTra.deleteMany({});
@@ -80,88 +79,100 @@ export async function resetDatabase(): Promise<void> {
       for (const item of s.allocations) await tx.phanBoXuatKho.create({ data: item });
       for (const item of s.exchangeReturns) await tx.phieuDoiTra.create({ data: item });
       for (const item of s.exchangeReturnDetails) await tx.chiTietDoiTra.create({ data: item });
-    });
+    }, { maxWait: 10000, timeout: 30000 });
   } else {
     memoryStore.reset();
+    (memoryStore.data as any).idempotency = [];
+    (memoryStore.data as any).adjustments = [];
   }
 }
 
 // ==========================================
 // CODE GENERATORS (SP0001, NCC001, KH0001, HD0001, PN0001, DC0001, DT0001)
 // ==========================================
-export async function getNextCode(prefix: string, digits: number): Promise<string> {
-  const usePg = await isPostgresAvailable();
+function maxNumericSuffix(codes: string[], prefix: string): number {
   let maxNum = 0;
+  for (const code of codes) {
+    if (!code.startsWith(prefix)) continue;
+    const n = parseInt(code.slice(prefix.length), 10);
+    if (!isNaN(n) && n > maxNum) maxNum = n;
+  }
+  return maxNum;
+}
+
+export async function getNextCodeNumber(
+  prefix: string,
+  txClient?: any,
+  forcePg?: boolean
+): Promise<number> {
+  const usePg = forcePg !== undefined ? forcePg : await isPostgresAvailable();
 
   if (usePg) {
+    const db = txClient || prisma;
+    let codes: string[] = [];
     if (prefix === 'SP') {
-      const res = await prisma.sanPham.findMany({ select: { maSanPham: true } });
-      for (const r of res) {
-        const n = parseInt(r.maSanPham.replace('SP', ''), 10);
-        if (!isNaN(n) && n > maxNum) maxNum = n;
-      }
+      codes = (await db.sanPham.findMany({ select: { maSanPham: true } })).map((r: any) => r.maSanPham);
     } else if (prefix === 'NCC') {
-      const res = await prisma.nhaCungCap.findMany({ select: { maNhaCungCap: true } });
-      for (const r of res) {
-        const n = parseInt(r.maNhaCungCap.replace('NCC', ''), 10);
-        if (!isNaN(n) && n > maxNum) maxNum = n;
-      }
+      codes = (await db.nhaCungCap.findMany({ select: { maNhaCungCap: true } })).map((r: any) => r.maNhaCungCap);
     } else if (prefix === 'KH') {
-      const res = await prisma.khachHang.findMany({ select: { maKhachHang: true } });
-      for (const r of res) {
-        const n = parseInt(r.maKhachHang.replace('KH', ''), 10);
-        if (!isNaN(n) && n > maxNum) maxNum = n;
-      }
+      codes = (await db.khachHang.findMany({ select: { maKhachHang: true } })).map((r: any) => r.maKhachHang);
     } else if (prefix === 'HD') {
-      const res = await prisma.hoaDon.findMany({ select: { maHoaDon: true } });
-      for (const r of res) {
-        const n = parseInt(r.maHoaDon.replace('HD', ''), 10);
-        if (!isNaN(n) && n > maxNum) maxNum = n;
-      }
+      codes = (await db.hoaDon.findMany({ select: { maHoaDon: true } })).map((r: any) => r.maHoaDon);
     } else if (prefix === 'PN') {
-      const res = await prisma.phieuNhapHang.findMany({ select: { maPhieuNhap: true } });
-      for (const r of res) {
-        const n = parseInt(r.maPhieuNhap.replace('PN', ''), 10);
-        if (!isNaN(n) && n > maxNum) maxNum = n;
-      }
+      codes = (await db.phieuNhapHang.findMany({ select: { maPhieuNhap: true } })).map((r: any) => r.maPhieuNhap);
     } else if (prefix === 'DC') {
-      const res = await prisma.phieuDieuChinhTonKho.findMany({ select: { maPhieuDieuChinh: true } });
-      for (const r of res) {
-        const n = parseInt(r.maPhieuDieuChinh.replace('DC', ''), 10);
-        if (!isNaN(n) && n > maxNum) maxNum = n;
-      }
+      codes = (await db.phieuDieuChinhTonKho.findMany({ select: { maPhieuDieuChinh: true } })).map((r: any) => r.maPhieuDieuChinh);
     } else if (prefix === 'DT') {
-      const res = await prisma.phieuDoiTra.findMany({ select: { maPhieuDoiTra: true } });
-      for (const r of res) {
-        const n = parseInt(r.maPhieuDoiTra.replace('DT', ''), 10);
-        if (!isNaN(n) && n > maxNum) maxNum = n;
-      }
+      codes = (await db.phieuDoiTra.findMany({ select: { maPhieuDoiTra: true } })).map((r: any) => r.maPhieuDoiTra);
+    } else if (prefix === 'DM') {
+      codes = (await db.danhMucSanPham.findMany({ select: { maDanhMuc: true } })).map((r: any) => r.maDanhMuc);
+    } else if (prefix === 'DV') {
+      codes = (await db.donViQuyDoi.findMany({ select: { maDonVi: true } })).map((r: any) => r.maDonVi);
+    } else if (prefix === 'LS') {
+      codes = (await db.lichSuGiaBan.findMany({ select: { maLichSu: true } })).map((r: any) => r.maLichSu);
+    } else if (prefix === 'CTN') {
+      codes = (await db.chiTietNhapHang.findMany({ select: { maChiTietNhap: true } })).map((r: any) => r.maChiTietNhap);
+    } else if (prefix === 'CTH') {
+      codes = (await db.chiTietHoaDon.findMany({ select: { maChiTietHoaDon: true } })).map((r: any) => r.maChiTietHoaDon);
+    } else if (prefix === 'PB') {
+      codes = (await db.phanBoXuatKho.findMany({ select: { maPhanBo: true } })).map((r: any) => r.maPhanBo);
+    } else if (prefix === 'CTD') {
+      codes = (await db.chiTietDoiTra.findMany({ select: { maChiTiet: true } })).map((r: any) => r.maChiTiet);
     }
-  } else {
-    // Memory store
-    let items: string[] = [];
-    if (prefix === 'SP') items = memoryStore.data.products.map((p) => p.maSanPham);
-    else if (prefix === 'NCC') items = memoryStore.data.suppliers.map((s) => s.maNhaCungCap);
-    else if (prefix === 'KH') items = memoryStore.data.customers.map((c) => c.maKhachHang);
-    else if (prefix === 'HD') items = memoryStore.data.invoices.map((i) => i.maHoaDon);
-    else if (prefix === 'PN') items = memoryStore.data.importTickets.map((t) => t.maPhieuNhap);
-    else if (prefix === 'DC') items = (memoryStore.data as any).adjustments?.map((a: any) => a.maPhieuDieuChinh) || [];
-    else if (prefix === 'DT') items = memoryStore.data.exchangeReturns.map((e) => e.maPhieuDoiTra);
-    else if (prefix === 'DV') items = memoryStore.data.units.map((u) => u.maDonVi);
-    else if (prefix === 'CTN') items = memoryStore.data.importDetails.map((c) => c.maChiTietNhap);
-    else if (prefix === 'CTH') items = memoryStore.data.invoiceDetails.map((c) => c.maChiTietHoaDon);
-    else if (prefix === 'PB') items = memoryStore.data.allocations.map((a) => a.maPhanBo);
-    else if (prefix === 'CTD') items = memoryStore.data.exchangeReturnDetails.map((c) => c.maChiTiet);
-
-    for (const code of items) {
-      const numStr = code.replace(prefix, '');
-      const n = parseInt(numStr, 10);
-      if (!isNaN(n) && n > maxNum) maxNum = n;
-    }
+    return maxNumericSuffix(codes, prefix) + 1;
   }
 
-  const nextNum = maxNum + 1;
-  return `${prefix}${String(nextNum).padStart(digits, '0')}`;
+  let items: string[] = [];
+  if (prefix === 'SP') items = memoryStore.data.products.map((p) => p.maSanPham);
+  else if (prefix === 'NCC') items = memoryStore.data.suppliers.map((s) => s.maNhaCungCap);
+  else if (prefix === 'KH') items = memoryStore.data.customers.map((c) => c.maKhachHang);
+  else if (prefix === 'HD') items = memoryStore.data.invoices.map((i) => i.maHoaDon);
+  else if (prefix === 'PN') items = memoryStore.data.importTickets.map((t) => t.maPhieuNhap);
+  else if (prefix === 'DC') items = (memoryStore.data as any).adjustments?.map((a: any) => a.maPhieuDieuChinh) || [];
+  else if (prefix === 'DT') items = memoryStore.data.exchangeReturns.map((e) => e.maPhieuDoiTra);
+  else if (prefix === 'DM') items = memoryStore.data.categories.map((c) => c.maDanhMuc);
+  else if (prefix === 'DV') items = memoryStore.data.units.map((u) => u.maDonVi);
+  else if (prefix === 'LS') items = memoryStore.data.priceHistories.map((h) => h.maLichSu);
+  else if (prefix === 'CTN') items = memoryStore.data.importDetails.map((c) => c.maChiTietNhap);
+  else if (prefix === 'CTH') items = memoryStore.data.invoiceDetails.map((c) => c.maChiTietHoaDon);
+  else if (prefix === 'PB') items = memoryStore.data.allocations.map((a) => a.maPhanBo);
+  else if (prefix === 'CTD') items = memoryStore.data.exchangeReturnDetails.map((c) => c.maChiTiet);
+
+  return maxNumericSuffix(items, prefix) + 1;
+}
+
+export function formatCode(prefix: string, num: number, digits: number): string {
+  return `${prefix}${String(num).padStart(digits, '0')}`;
+}
+
+export async function getNextCode(
+  prefix: string,
+  digits: number,
+  txClient?: any,
+  forcePg?: boolean
+): Promise<string> {
+  const nextNum = await getNextCodeNumber(prefix, txClient, forcePg);
+  return formatCode(prefix, nextNum, digits);
 }
 
 // ==========================================
@@ -170,6 +181,11 @@ export async function getNextCode(prefix: string, digits: number): Promise<strin
 export async function getAccountByUsername(username: string) {
   const usePg = await isPostgresAvailable();
   if (usePg) {
+    const count = await prisma.taiKhoan.count();
+    if (count === 0) {
+      // Tự động khởi tạo dữ liệu mẫu lần đầu nếu CSDL vừa mới đẩy schema
+      await resetDatabase();
+    }
     return prisma.taiKhoan.findUnique({ where: { tenDangNhap: username } });
   }
   return memoryStore.data.accounts.find((a) => a.tenDangNhap === username) || null;
@@ -188,8 +204,7 @@ export async function getCategories() {
 
 export async function createCategory(tenDanhMuc: string) {
   const usePg = await isPostgresAvailable();
-  const nextNum = memoryStore.data.categories.length + 1;
-  const maDanhMuc = `DM${String(nextNum).padStart(4, '0')}`;
+  const maDanhMuc = await getNextCode('DM', 4, undefined, usePg);
   const record = { maDanhMuc, tenDanhMuc };
 
   if (usePg) {
@@ -307,40 +322,41 @@ export async function createProduct(payload: {
   moTa?: string;
   extraUnits?: Array<{ tenDonVi: string; heSoQuyDoi: number; giaBan: number }>;
 }) {
-  const maSanPham = await getNextCode('SP', 4);
   const usePg = await isPostgresAvailable();
-
-  const baseUnitCode = await getNextCode('DV', 4);
-  const baseUnit = {
-    maDonVi: baseUnitCode,
-    maSanPham,
-    tenDonVi: payload.donViTinh,
-    heSoQuyDoi: 1,
-    giaBan: payload.giaBan,
-  };
-
-  const productRecord = {
-    maSanPham,
-    tenSanPham: payload.tenSanPham,
-    maDanhMuc: payload.maDanhMuc,
-    maVach: payload.maVach || null,
-    donViTinh: payload.donViTinh,
-    giaNhapBinhQuan: payload.giaNhap,
-    soLuongTon: 0,
-    mucTonToiThieu: payload.mucTonToiThieu ?? 0,
-    quanLyHanSuDung: Boolean(payload.quanLyHanSuDung),
-    trangThai: 'Đang kinh doanh',
-    moTa: payload.moTa || null,
-  };
 
   if (usePg) {
     return prisma.$transaction(async (tx) => {
+      const maSanPham = await getNextCode('SP', 4, tx, true);
+      let nextDvNum = await getNextCodeNumber('DV', tx, true);
+
+      const productRecord = {
+        maSanPham,
+        tenSanPham: payload.tenSanPham,
+        maDanhMuc: payload.maDanhMuc,
+        maVach: payload.maVach || null,
+        donViTinh: payload.donViTinh,
+        giaNhapBinhQuan: payload.giaNhap,
+        soLuongTon: 0,
+        mucTonToiThieu: payload.mucTonToiThieu ?? 0,
+        quanLyHanSuDung: Boolean(payload.quanLyHanSuDung),
+        trangThai: 'Đang kinh doanh',
+        moTa: payload.moTa || null,
+      };
+
       const created = await tx.sanPham.create({ data: productRecord });
-      await tx.donViQuyDoi.create({ data: baseUnit });
+      const baseUnitCode = formatCode('DV', nextDvNum++, 4);
+      await tx.donViQuyDoi.create({
+        data: {
+          maDonVi: baseUnitCode,
+          maSanPham,
+          tenDonVi: payload.donViTinh,
+          heSoQuyDoi: 1,
+          giaBan: payload.giaBan,
+        },
+      });
       if (payload.extraUnits && payload.extraUnits.length > 0) {
-        for (let i = 0; i < payload.extraUnits.length; i++) {
-          const eu = payload.extraUnits[i];
-          const euCode = await getNextCode('DV', 4);
+        for (const eu of payload.extraUnits) {
+          const euCode = formatCode('DV', nextDvNum++, 4);
           await tx.donViQuyDoi.create({
             data: {
               maDonVi: euCode,
@@ -357,20 +373,39 @@ export async function createProduct(payload: {
   }
 
   // Memory store
+  const maSanPham = await getNextCode('SP', 4, undefined, false);
+  let nextDvNum = await getNextCodeNumber('DV', undefined, false);
+  const productRecord = {
+    maSanPham,
+    tenSanPham: payload.tenSanPham,
+    maDanhMuc: payload.maDanhMuc,
+    maVach: payload.maVach || null,
+    donViTinh: payload.donViTinh,
+    giaNhapBinhQuan: payload.giaNhap,
+    soLuongTon: 0,
+    mucTonToiThieu: payload.mucTonToiThieu ?? 0,
+    quanLyHanSuDung: Boolean(payload.quanLyHanSuDung),
+    trangThai: 'Đang kinh doanh',
+    moTa: payload.moTa || null,
+  };
+
   memoryStore.data.products.push(productRecord);
-  memoryStore.data.units.push(baseUnit);
+  memoryStore.data.units.push({
+    maDonVi: formatCode('DV', nextDvNum++, 4),
+    maSanPham,
+    tenDonVi: payload.donViTinh,
+    heSoQuyDoi: 1,
+    giaBan: payload.giaBan,
+  });
   if (payload.extraUnits && payload.extraUnits.length > 0) {
-    let count = 1;
     for (const eu of payload.extraUnits) {
-      const extraCode = `DV${String(memoryStore.data.units.length + 1).padStart(4, '0')}`;
       memoryStore.data.units.push({
-        maDonVi: extraCode,
+        maDonVi: formatCode('DV', nextDvNum++, 4),
         maSanPham,
         tenDonVi: eu.tenDonVi,
         heSoQuyDoi: eu.heSoQuyDoi,
         giaBan: eu.giaBan,
       });
-      count++;
     }
   }
   return productRecord;
@@ -482,13 +517,13 @@ export async function updateProductPrice(
   giaMoi: number
 ): Promise<{ success: boolean; error?: string }> {
   const usePg = await isPostgresAvailable();
-  const nextLsCode = await getNextCode('LS', 4);
 
   if (usePg) {
-    const unit = await prisma.donViQuyDoi.findUnique({ where: { maDonVi } });
-    if (!unit) return { success: false, error: 'Đơn vị không tồn tại' };
+    return prisma.$transaction(async (tx) => {
+      const unit = await tx.donViQuyDoi.findUnique({ where: { maDonVi } });
+      if (!unit) return { success: false, error: 'Đơn vị không tồn tại' };
 
-    await prisma.$transaction(async (tx) => {
+      const nextLsCode = await getNextCode('LS', 4, tx, true);
       await tx.lichSuGiaBan.create({
         data: {
           maLichSu: nextLsCode,
@@ -502,13 +537,14 @@ export async function updateProductPrice(
         where: { maDonVi },
         data: { giaBan: giaMoi },
       });
+      return { success: true };
     });
-    return { success: true };
   }
 
   const unit = memoryStore.data.units.find((u) => u.maDonVi === maDonVi);
   if (!unit) return { success: false, error: 'Đơn vị không tồn tại' };
 
+  const nextLsCode = await getNextCode('LS', 4, undefined, false);
   const giaCu = unit.giaBan;
   unit.giaBan = giaMoi;
   memoryStore.data.priceHistories.push({
@@ -807,21 +843,26 @@ export async function createImportTicket(payload: {
     hanSuDung?: string | null;
   }>;
 }) {
-  const maPhieuNhap = await getNextCode('PN', 4);
   const usePg = await isPostgresAvailable();
   const now = new Date();
 
   let tongTien = 0;
-  const detailsToCreate: any[] = [];
-
   for (let i = 0; i < payload.items.length; i++) {
     const it = payload.items[i];
-    const thanhTien = it.soLuongNhap * it.giaNhap;
-    tongTien += thanhTien;
+    tongTien += it.soLuongNhap * it.giaNhap;
   }
 
   if (usePg) {
     return prisma.$transaction(async (tx) => {
+      // Lock product rows in sorted order to serialize concurrent cost/stock updates
+      const prodIds = Array.from(new Set(payload.items.map((i) => i.maSanPham))).sort();
+      for (const pid of prodIds) {
+        await tx.$queryRaw`SELECT "maSanPham" FROM "SanPham" WHERE "maSanPham" = ${pid} FOR UPDATE`;
+      }
+
+      const maPhieuNhap = await getNextCode('PN', 4, tx, true);
+      let nextCtnNum = await getNextCodeNumber('CTN', tx, true);
+
       const ticket = await tx.phieuNhapHang.create({
         data: {
           maPhieuNhap,
@@ -833,7 +874,7 @@ export async function createImportTicket(payload: {
 
       for (let i = 0; i < payload.items.length; i++) {
         const it = payload.items[i];
-        const maChiTietNhap = await getNextCode('CTN', 4);
+        const maChiTietNhap = formatCode('CTN', nextCtnNum++, 4);
         const unit = await tx.donViQuyDoi.findUnique({ where: { maDonVi: it.maDonViNhap } });
         const tyLeQuyDoi = unit?.heSoQuyDoi || 1;
         const baseQty = it.soLuongNhap * tyLeQuyDoi;
@@ -860,8 +901,6 @@ export async function createImportTicket(payload: {
           const oldStock = product.soLuongTon;
           const oldPrice = Number(product.giaNhapBinhQuan);
           const newStock = oldStock + baseQty;
-          // Weighted average price per base unit:
-          // newAvg = (oldStock * oldPrice + baseQty * (giaNhap / tyLeQuyDoi)) / newStock
           const costOfNewBase = it.giaNhap / tyLeQuyDoi;
           const newAvg =
             newStock > 0 ? (oldStock * oldPrice + baseQty * costOfNewBase) / newStock : costOfNewBase;
@@ -881,6 +920,8 @@ export async function createImportTicket(payload: {
   }
 
   // Memory store
+  const maPhieuNhap = await getNextCode('PN', 4, undefined, false);
+  let nextCtnNum = await getNextCodeNumber('CTN', undefined, false);
   const ticketRecord = {
     maPhieuNhap,
     maNhaCungCap: payload.maNhaCungCap,
@@ -890,7 +931,7 @@ export async function createImportTicket(payload: {
   memoryStore.data.importTickets.push(ticketRecord);
 
   for (const it of payload.items) {
-    const maChiTietNhap = `CTN${String(memoryStore.data.importDetails.length + 1).padStart(4, '0')}`;
+    const maChiTietNhap = formatCode('CTN', nextCtnNum++, 4);
     const unit = memoryStore.data.units.find((u) => u.maDonVi === it.maDonViNhap);
     const tyLeQuyDoi = unit?.heSoQuyDoi || 1;
     const baseQty = it.soLuongNhap * tyLeQuyDoi;
@@ -933,17 +974,18 @@ export async function adjustInventory(payload: {
   soLuongMoi: number;
   lyDo: string;
 }) {
-  const maPhieuDieuChinh = await getNextCode('DC', 4);
   const usePg = await isPostgresAvailable();
   const now = new Date();
 
   if (usePg) {
     return prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "maSanPham" FROM "SanPham" WHERE "maSanPham" = ${payload.maSanPham} FOR UPDATE`;
       const lot = await tx.chiTietNhapHang.findUnique({
         where: { maChiTietNhap: payload.maChiTietNhap },
       });
       if (!lot) throw new Error('Chi tiết phiếu nhập không tồn tại');
 
+      const maPhieuDieuChinh = await getNextCode('DC', 4, tx, true);
       const soLuongCu = lot.soLuongCon;
       const chenhLech = payload.soLuongMoi - soLuongCu;
 
@@ -977,6 +1019,7 @@ export async function adjustInventory(payload: {
   }
 
   // Memory store
+  const maPhieuDieuChinh = await getNextCode('DC', 4, undefined, false);
   const lot = memoryStore.data.importDetails.find(
     (c) => c.maChiTietNhap === payload.maChiTietNhap
   );
@@ -1219,6 +1262,24 @@ export async function getImportHistory(keyword?: string, fromDate?: string, toDa
 // ==========================================
 
 // Inventory allocation order: FEFO for expirable items, FIFO for non-expirable items.
+function sortLotsFEFO<T extends { hanSuDung?: Date | string | null; phieuNhap?: { ngayNhap?: Date | string | null } | null; maChiTietNhap: string }>(lots: T[]): T[] {
+  return [...lots].sort((a, b) => {
+    // FEFO first: items with expiry date sorted ascending
+    if (a.hanSuDung && b.hanSuDung) {
+      const diff = new Date(a.hanSuDung).getTime() - new Date(b.hanSuDung).getTime();
+      if (diff !== 0) return diff;
+    } else {
+      if (a.hanSuDung && !b.hanSuDung) return -1;
+      if (!a.hanSuDung && b.hanSuDung) return 1;
+    }
+    // Same expiry or non-expirable: FIFO by import date
+    const dateA = a.phieuNhap?.ngayNhap ? new Date(a.phieuNhap.ngayNhap).getTime() : 0;
+    const dateB = b.phieuNhap?.ngayNhap ? new Date(b.phieuNhap.ngayNhap).getTime() : 0;
+    if (dateA !== dateB) return dateA - dateB;
+    return a.maChiTietNhap.localeCompare(b.maChiTietNhap);
+  });
+}
+
 // Expired lots (hanSuDung < today) are NOT sellable.
 export async function getSellableInventoryLots(maSanPham: string) {
   const usePg = await isPostgresAvailable();
@@ -1226,7 +1287,6 @@ export async function getSellableInventoryLots(maSanPham: string) {
   today.setHours(0, 0, 0, 0);
 
   if (usePg) {
-    // Lock row check
     const lots = await prisma.chiTietNhapHang.findMany({
       where: {
         maSanPham,
@@ -1234,12 +1294,11 @@ export async function getSellableInventoryLots(maSanPham: string) {
         OR: [{ hanSuDung: null }, { hanSuDung: { gte: today } }],
       },
       include: { phieuNhap: true },
-      orderBy: [{ hanSuDung: 'asc' }, { phieuNhap: { ngayNhap: 'asc' } }],
     });
-    return lots;
+    return sortLotsFEFO(lots);
   }
 
-  return memoryStore.data.importDetails
+  const memLots = memoryStore.data.importDetails
     .filter((lot) => {
       if (lot.maSanPham !== maSanPham || lot.soLuongCon <= 0) return false;
       if (lot.hanSuDung && new Date(lot.hanSuDung) < today) return false;
@@ -1248,19 +1307,8 @@ export async function getSellableInventoryLots(maSanPham: string) {
     .map((lot) => {
       const pn = memoryStore.data.importTickets.find((t) => t.maPhieuNhap === lot.maPhieuNhap);
       return { ...lot, phieuNhap: pn };
-    })
-    .sort((a, b) => {
-      // FEFO first: items with expiry date sorted ascending
-      if (a.hanSuDung && b.hanSuDung) {
-        return new Date(a.hanSuDung).getTime() - new Date(b.hanSuDung).getTime();
-      }
-      if (a.hanSuDung && !b.hanSuDung) return -1;
-      if (!a.hanSuDung && b.hanSuDung) return 1;
-      // Non-expirable: FIFO by import date
-      const dateA = a.phieuNhap ? new Date(a.phieuNhap.ngayNhap).getTime() : 0;
-      const dateB = b.phieuNhap ? new Date(b.phieuNhap.ngayNhap).getTime() : 0;
-      return dateA - dateB;
     });
+  return sortLotsFEFO(memLots);
 }
 
 export async function createSaleTransaction(payload: {
@@ -1277,7 +1325,6 @@ export async function createSaleTransaction(payload: {
     thanhTien: number;
   }>;
 }) {
-  const maHoaDon = await getNextCode('HD', 4);
   const usePg = await isPostgresAvailable();
   const now = new Date();
   const today = new Date();
@@ -1305,7 +1352,17 @@ export async function createSaleTransaction(payload: {
         }
       }
 
-      // 2. Lock and check inventory for each item
+      // 2. Lock product rows in sorted order to prevent concurrent negative stock / double deduction
+      const productIds = Array.from(new Set(payload.items.map((it) => it.maSanPham))).sort();
+      for (const pid of productIds) {
+        await tx.$executeRaw`SELECT "maSanPham" FROM "SanPham" WHERE "maSanPham" = ${pid} FOR UPDATE`;
+      }
+
+      const maHoaDon = await getNextCode('HD', 4, tx, true);
+      let nextCthNum = await getNextCodeNumber('CTH', tx, true);
+      let nextPbNum = await getNextCodeNumber('PB', tx, true);
+
+      // 3. Check & allocate inventory for each item
       const allocationsToCreate: any[] = [];
       const invoiceDetailsToCreate: any[] = [];
       const warningLowStockProducts: string[] = [];
@@ -1315,16 +1372,16 @@ export async function createSaleTransaction(payload: {
         const tyLe = unit?.heSoQuyDoi || 1;
         const totalBaseNeeded = it.soLuong * tyLe;
 
-        // Fetch sellable lots
-        const lots = await tx.chiTietNhapHang.findMany({
+        // Fetch sellable lots with deterministic FEFO -> FIFO sorting
+        const rawLots = await tx.chiTietNhapHang.findMany({
           where: {
             maSanPham: it.maSanPham,
             soLuongCon: { gt: 0 },
             OR: [{ hanSuDung: null }, { hanSuDung: { gte: today } }],
           },
           include: { phieuNhap: true },
-          orderBy: [{ hanSuDung: 'asc' }, { phieuNhap: { ngayNhap: 'asc' } }],
         });
+        const lots = sortLotsFEFO(rawLots);
 
         const totalAvailable = lots.reduce((acc, l) => acc + l.soLuongCon, 0);
         if (totalAvailable < totalBaseNeeded) {
@@ -1333,7 +1390,7 @@ export async function createSaleTransaction(payload: {
 
         // Allocate FEFO / FIFO
         let needed = totalBaseNeeded;
-        const cthId = await getNextCode('CTH', 4);
+        const cthId = formatCode('CTH', nextCthNum++, 4);
         const prod = await tx.sanPham.findUnique({ where: { maSanPham: it.maSanPham } });
         const giaVon = Number(prod?.giaNhapBinhQuan || 0);
 
@@ -1360,7 +1417,7 @@ export async function createSaleTransaction(payload: {
             data: { soLuongCon: lot.soLuongCon - take },
           });
 
-          const pbId = await getNextCode('PB', 4);
+          const pbId = formatCode('PB', nextPbNum++, 4);
           allocationsToCreate.push({
             maPhanBo: pbId,
             maChiTietNhap: lot.maChiTietNhap,
@@ -1376,7 +1433,7 @@ export async function createSaleTransaction(payload: {
         });
 
         // BR-UC6-08: Check low stock warning
-        if (updatedProd.soLuongTon <= updatedProd.mucTonToiThieu) {
+        if (updatedProd.soLuongTon <= updatedProd.mucTonToiThieu && !warningLowStockProducts.includes(updatedProd.tenSanPham)) {
           warningLowStockProducts.push(updatedProd.tenSanPham);
         }
       }
@@ -1432,22 +1489,35 @@ export async function createSaleTransaction(payload: {
     }
   }
 
+  const maHoaDon = await getNextCode('HD', 4);
+  let nextCthNum = await getNextCodeNumber('CTH');
+  let nextPbNum = await getNextCodeNumber('PB');
+
   const invoiceDetailsToCreate: any[] = [];
   const allocationsToCreate: any[] = [];
   const warningLowStockProducts: string[] = [];
+  const plannedLotDeductions = new Map<string, number>();
+  const plannedProdDeductions = new Map<string, number>();
 
   for (const it of payload.items) {
     const unit = memoryStore.data.units.find((u) => u.maDonVi === it.maDonViBan);
     const tyLe = unit?.heSoQuyDoi || 1;
     const totalBaseNeeded = it.soLuong * tyLe;
 
-    const lots = await getSellableInventoryLots(it.maSanPham);
-    const totalAvailable = lots.reduce((acc, l) => acc + l.soLuongCon, 0);
+    const rawLots = await getSellableInventoryLots(it.maSanPham);
+    const lotsWithRemaining = rawLots
+      .map((l) => ({
+        ...l,
+        soLuongCon: l.soLuongCon - (plannedLotDeductions.get(l.maChiTietNhap) || 0),
+      }))
+      .filter((l) => l.soLuongCon > 0);
+
+    const totalAvailable = lotsWithRemaining.reduce((acc, l) => acc + l.soLuongCon, 0);
     if (totalAvailable < totalBaseNeeded) {
       throw new Error('Không đủ số lượng hàng có thể bán');
     }
 
-    const cthId = `CTH${String(memoryStore.data.invoiceDetails.length + invoiceDetailsToCreate.length + 1).padStart(4, '0')}`;
+    const cthId = formatCode('CTH', nextCthNum++, 4);
     const prod = memoryStore.data.products.find((p) => p.maSanPham === it.maSanPham);
     const giaVon = prod?.giaNhapBinhQuan || 0;
 
@@ -1464,20 +1534,17 @@ export async function createSaleTransaction(payload: {
     });
 
     let needed = totalBaseNeeded;
-    for (const lot of lots) {
+    for (const lot of lotsWithRemaining) {
       if (needed <= 0) break;
       const take = Math.min(lot.soLuongCon, needed);
       needed -= take;
 
-      // Update in memory lot
-      const storeLot = memoryStore.data.importDetails.find(
-        (l) => l.maChiTietNhap === lot.maChiTietNhap
+      plannedLotDeductions.set(
+        lot.maChiTietNhap,
+        (plannedLotDeductions.get(lot.maChiTietNhap) || 0) + take
       );
-      if (storeLot) {
-        storeLot.soLuongCon -= take;
-      }
 
-      const pbId = `PB${String(memoryStore.data.allocations.length + allocationsToCreate.length + 1).padStart(4, '0')}`;
+      const pbId = formatCode('PB', nextPbNum++, 4);
       allocationsToCreate.push({
         maPhanBo: pbId,
         maChiTietNhap: lot.maChiTietNhap,
@@ -1487,13 +1554,28 @@ export async function createSaleTransaction(payload: {
       });
     }
 
+    plannedProdDeductions.set(
+      it.maSanPham,
+      (plannedProdDeductions.get(it.maSanPham) || 0) + totalBaseNeeded
+    );
+  }
+
+  // Apply planned mutations atomically after all validations succeed
+  plannedLotDeductions.forEach((deduct, lotId) => {
+    const storeLot = memoryStore.data.importDetails.find((l) => l.maChiTietNhap === lotId);
+    if (storeLot) {
+      storeLot.soLuongCon -= deduct;
+    }
+  });
+  plannedProdDeductions.forEach((deduct, prodId) => {
+    const prod = memoryStore.data.products.find((p) => p.maSanPham === prodId);
     if (prod) {
-      prod.soLuongTon -= totalBaseNeeded;
-      if (prod.soLuongTon <= prod.mucTonToiThieu) {
+      prod.soLuongTon -= deduct;
+      if (prod.soLuongTon <= prod.mucTonToiThieu && !warningLowStockProducts.includes(prod.tenSanPham)) {
         warningLowStockProducts.push(prod.tenSanPham);
       }
     }
-  }
+  });
 
   const invoiceRecord = {
     maHoaDon,
@@ -1670,8 +1752,13 @@ export async function cancelInvoice(
         const existing = await tx.idempotencyKey.findUnique({
           where: { key: idempotencyKey },
         });
-        if (existing) return { success: true };
+        if (existing) {
+          return existing.response ? JSON.parse(existing.response) : { success: true };
+        }
       }
+
+      // Lock invoice row first, then lock distinct products in sorted order
+      await tx.$executeRaw`SELECT "maHoaDon" FROM "HoaDon" WHERE "maHoaDon" = ${maHoaDon} FOR UPDATE`;
 
       const inv = await tx.hoaDon.findUnique({
         where: { maHoaDon },
@@ -1689,6 +1776,11 @@ export async function cancelInvoice(
       }
       if (inv.phieuDoiTras.length > 0) {
         throw new Error('Hóa đơn có giao dịch đổi/trả hàng, không thể hủy trực tiếp');
+      }
+
+      const productIds = Array.from(new Set(inv.chiTietHoaDons.map((d) => d.maSanPham))).sort();
+      for (const pid of productIds) {
+        await tx.$executeRaw`SELECT "maSanPham" FROM "SanPham" WHERE "maSanPham" = ${pid} FOR UPDATE`;
       }
 
       // Restore inventory per exact allocation
@@ -1717,17 +1809,31 @@ export async function cancelInvoice(
         },
       });
 
+      const responseData = { success: true };
       if (idempotencyKey) {
         await tx.idempotencyKey.create({
-          data: { key: idempotencyKey, action: 'CANCEL_INVOICE' },
+          data: {
+            key: idempotencyKey,
+            action: 'CANCEL_INVOICE',
+            response: JSON.stringify(responseData),
+          },
         });
       }
 
-      return { success: true };
+      return responseData;
     });
   }
 
   // Memory store
+  if (idempotencyKey) {
+    const existing = (memoryStore.data as any).idempotency?.find(
+      (k: any) => k.key === idempotencyKey
+    );
+    if (existing) {
+      return existing.response ? JSON.parse(existing.response) : { success: true };
+    }
+  }
+
   const inv = memoryStore.data.invoices.find((i) => i.maHoaDon === maHoaDon);
   if (!inv) throw new Error('Hóa đơn không tồn tại');
   if (inv.trangThai === 'Đã hủy') {
@@ -1761,7 +1867,17 @@ export async function cancelInvoice(
   inv.lyDoHuy = lyDoHuy;
   inv.thoiGianHuy = now;
 
-  return { success: true };
+  const responseData = { success: true };
+  if (idempotencyKey) {
+    if (!(memoryStore.data as any).idempotency) (memoryStore.data as any).idempotency = [];
+    (memoryStore.data as any).idempotency.push({
+      key: idempotencyKey,
+      action: 'CANCEL_INVOICE',
+      response: JSON.stringify(responseData),
+    });
+  }
+
+  return responseData;
 }
 
 // UC 6.5: Exchange & Return
@@ -1779,9 +1895,10 @@ export async function createExchangeReturn(payload: {
     soLuong: number;
   }>;
 }) {
-  const maPhieuDoiTra = await getNextCode('DT', 4);
   const usePg = await isPostgresAvailable();
   const now = new Date();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
   if (usePg) {
     return prisma.$transaction(async (tx) => {
@@ -1789,8 +1906,12 @@ export async function createExchangeReturn(payload: {
         const existing = await tx.idempotencyKey.findUnique({
           where: { key: payload.idempotencyKey },
         });
-        if (existing) return { success: true };
+        if (existing) {
+          return existing.response ? JSON.parse(existing.response) : { success: true };
+        }
       }
+
+      await tx.$executeRaw`SELECT "maHoaDon" FROM "HoaDon" WHERE "maHoaDon" = ${payload.maHoaDon} FOR UPDATE`;
 
       const inv = await tx.hoaDon.findUnique({
         where: { maHoaDon: payload.maHoaDon },
@@ -1808,31 +1929,50 @@ export async function createExchangeReturn(payload: {
         throw new Error('Hóa đơn không thể đổi/trả hàng');
       }
 
+      // Lock all affected products (returned + exchanged) in sorted order
+      const productIds = Array.from(
+        new Set([
+          ...inv.chiTietHoaDons.map((d) => d.maSanPham),
+          ...payload.itemsExchange.map((e) => e.maSanPham),
+        ])
+      ).sort();
+      for (const pid of productIds) {
+        await tx.$executeRaw`SELECT "maSanPham" FROM "SanPham" WHERE "maSanPham" = ${pid} FOR UPDATE`;
+      }
+
+      const maPhieuDoiTra = await getNextCode('DT', 4, tx, true);
+      let nextCtdNum = await getNextCodeNumber('CTD', tx, true);
+      let nextPbNum = await getNextCodeNumber('PB', tx, true);
+
       let tongTienHangTra = 0;
       let tongTienHangDoi = 0;
       const detailsToCreate: any[] = [];
       const allocationsToCreate: any[] = [];
+      const inBatchReturnedUnits = new Map<string, number>();
+      const inBatchRestoredBase = new Map<string, number>();
 
       // 1. Process returned items
       for (const ret of payload.itemsReturn) {
         const line = inv.chiTietHoaDons.find((d) => d.maChiTietHoaDon === ret.maChiTietHoaDon);
         if (!line) throw new Error('Dòng hóa đơn không hợp lệ');
 
-        // Check already returned quantity
+        // Check already returned quantity (previous tickets + earlier lines in same batch)
         const returnedPrev = inv.phieuDoiTras.flatMap((p) =>
           p.chiTietDoiTras.filter((c) => c.maChiTietHoaDon === ret.maChiTietHoaDon && c.loaiDong === 'Hàng trả')
         );
         const totalReturnedPreviously = returnedPrev.reduce((acc, c) => acc + c.soLuong, 0);
-        const remainingReturnable = line.soLuong - totalReturnedPreviously;
+        const extraReturnedInBatch = inBatchReturnedUnits.get(ret.maChiTietHoaDon) || 0;
+        const remainingReturnable = line.soLuong - totalReturnedPreviously - extraReturnedInBatch;
 
         if (ret.soLuongTra <= 0 || ret.soLuongTra > remainingReturnable) {
           throw new Error('Số lượng trả không hợp lệ');
         }
+        inBatchReturnedUnits.set(ret.maChiTietHoaDon, extraReturnedInBatch + ret.soLuongTra);
 
         const thanhTienTra = ret.soLuongTra * Number(line.donGia);
         tongTienHangTra += thanhTienTra;
 
-        const ctdId = await getNextCode('CTD', 4);
+        const ctdId = formatCode('CTD', nextCtdNum++, 4);
         detailsToCreate.push({
           maChiTiet: ctdId,
           maPhieuDoiTra,
@@ -1848,14 +1988,27 @@ export async function createExchangeReturn(payload: {
           duocNhapLaiKho: ret.duocNhapLaiKho,
         });
 
-        // If restock: restore in reverse order of allocations (LIFO)
+        // If restock: restore in reverse order of allocations (LIFO), capped by exported minus previously restored
         if (ret.duocNhapLaiKho) {
+          const priorRestoredBase = returnedPrev
+            .filter((c) => c.duocNhapLaiKho)
+            .reduce((acc, c) => acc + c.soLuong * c.tyLeQuyDoi, 0);
+          const batchRestoredBase = inBatchRestoredBase.get(ret.maChiTietHoaDon) || 0;
+          let skipBase = priorRestoredBase + batchRestoredBase;
+
           let baseToRestore = ret.soLuongTra * line.tyLeQuyDoi;
+          inBatchRestoredBase.set(ret.maChiTietHoaDon, batchRestoredBase + baseToRestore);
+
           const sortedPbs = [...line.phanBoXuatKhos].reverse();
 
           for (const pb of sortedPbs) {
             if (baseToRestore <= 0) break;
-            const restoreAmount = Math.min(pb.soLuongXuat, baseToRestore);
+            const alreadyRestoredFromPb = Math.min(pb.soLuongXuat, skipBase);
+            skipBase -= alreadyRestoredFromPb;
+            const remainingCapacity = pb.soLuongXuat - alreadyRestoredFromPb;
+            if (remainingCapacity <= 0) continue;
+
+            const restoreAmount = Math.min(remainingCapacity, baseToRestore);
             baseToRestore -= restoreAmount;
 
             await tx.chiTietNhapHang.update({
@@ -1872,9 +2025,6 @@ export async function createExchangeReturn(payload: {
       }
 
       // 2. Process exchanged items
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
       for (const ex of payload.itemsExchange) {
         const unit = await tx.donViQuyDoi.findUnique({ where: { maDonVi: ex.maDonVi } });
         if (!unit) throw new Error('Đơn vị hàng đổi không hợp lệ');
@@ -1882,15 +2032,15 @@ export async function createExchangeReturn(payload: {
         if (!prod) throw new Error('Sản phẩm đổi không hợp lệ');
 
         const totalBaseNeeded = ex.soLuong * unit.heSoQuyDoi;
-        const lots = await tx.chiTietNhapHang.findMany({
+        const rawLots = await tx.chiTietNhapHang.findMany({
           where: {
             maSanPham: ex.maSanPham,
             soLuongCon: { gt: 0 },
             OR: [{ hanSuDung: null }, { hanSuDung: { gte: today } }],
           },
           include: { phieuNhap: true },
-          orderBy: [{ hanSuDung: 'asc' }, { phieuNhap: { ngayNhap: 'asc' } }],
         });
+        const lots = sortLotsFEFO(rawLots);
 
         const totalAvailable = lots.reduce((acc, l) => acc + l.soLuongCon, 0);
         if (totalAvailable < totalBaseNeeded) {
@@ -1900,7 +2050,7 @@ export async function createExchangeReturn(payload: {
         const thanhTienDoi = ex.soLuong * Number(unit.giaBan);
         tongTienHangDoi += thanhTienDoi;
 
-        const ctdId = await getNextCode('CTD', 4);
+        const ctdId = formatCode('CTD', nextCtdNum++, 4);
         detailsToCreate.push({
           maChiTiet: ctdId,
           maPhieuDoiTra,
@@ -1927,7 +2077,7 @@ export async function createExchangeReturn(payload: {
             data: { soLuongCon: lot.soLuongCon - take },
           });
 
-          const pbId = await getNextCode('PB', 4);
+          const pbId = formatCode('PB', nextPbNum++, 4);
           allocationsToCreate.push({
             maPhanBo: pbId,
             maChiTietNhap: lot.maChiTietNhap,
@@ -1964,26 +2114,49 @@ export async function createExchangeReturn(payload: {
         await tx.phanBoXuatKho.create({ data: a });
       }
 
+      const responseData = { success: true, phieu };
       if (payload.idempotencyKey) {
         await tx.idempotencyKey.create({
-          data: { key: payload.idempotencyKey, action: 'EXCHANGE_RETURN' },
+          data: {
+            key: payload.idempotencyKey,
+            action: 'EXCHANGE_RETURN',
+            response: JSON.stringify(responseData),
+          },
         });
       }
 
-      return { success: true, phieu };
+      return responseData;
     });
   }
 
   // Memory store
+  if (payload.idempotencyKey) {
+    const existing = (memoryStore.data as any).idempotency?.find(
+      (k: any) => k.key === payload.idempotencyKey
+    );
+    if (existing) {
+      return existing.response ? JSON.parse(existing.response) : { success: true };
+    }
+  }
+
   const inv = memoryStore.data.invoices.find((i) => i.maHoaDon === payload.maHoaDon);
   if (!inv || inv.trangThai === 'Đã hủy') {
     throw new Error('Hóa đơn không thể đổi/trả hàng');
   }
 
+  const maPhieuDoiTra = await getNextCode('DT', 4);
+  let nextCtdNum = await getNextCodeNumber('CTD');
+  let nextPbNum = await getNextCodeNumber('PB');
+
   let tongTienHangTra = 0;
   let tongTienHangDoi = 0;
   const detailsToCreate: any[] = [];
   const allocationsToCreate: any[] = [];
+  const inBatchReturnedUnits = new Map<string, number>();
+  const inBatchRestoredBase = new Map<string, number>();
+  // Track net planned deltas per lot & product so validation failures stay atomic
+  const plannedLotDeltas = new Map<string, number>();
+  const plannedProdDeltas = new Map<string, number>();
 
   for (const ret of payload.itemsReturn) {
     const line = memoryStore.data.invoiceDetails.find(
@@ -1995,16 +2168,18 @@ export async function createExchangeReturn(payload: {
       (c) => c.maChiTietHoaDon === ret.maChiTietHoaDon && c.loaiDong === 'Hàng trả'
     );
     const totalReturned = previousReturns.reduce((acc, c) => acc + c.soLuong, 0);
-    const remaining = line.soLuong - totalReturned;
+    const extraInBatch = inBatchReturnedUnits.get(ret.maChiTietHoaDon) || 0;
+    const remaining = line.soLuong - totalReturned - extraInBatch;
 
     if (ret.soLuongTra <= 0 || ret.soLuongTra > remaining) {
       throw new Error('Số lượng trả không hợp lệ');
     }
+    inBatchReturnedUnits.set(ret.maChiTietHoaDon, extraInBatch + ret.soLuongTra);
 
     const thanhTienTra = ret.soLuongTra * Number(line.donGia);
     tongTienHangTra += thanhTienTra;
 
-    const ctdId = `CTD${String(memoryStore.data.exchangeReturnDetails.length + detailsToCreate.length + 1).padStart(4, '0')}`;
+    const ctdId = formatCode('CTD', nextCtdNum++, 4);
     detailsToCreate.push({
       maChiTiet: ctdId,
       maPhieuDoiTra,
@@ -2022,26 +2197,35 @@ export async function createExchangeReturn(payload: {
     });
 
     if (ret.duocNhapLaiKho) {
+      const priorRestoredBase = previousReturns
+        .filter((c) => c.duocNhapLaiKho)
+        .reduce((acc, c) => acc + c.soLuong * c.tyLeQuyDoi, 0);
+      const batchRestoredBase = inBatchRestoredBase.get(ret.maChiTietHoaDon) || 0;
+      let skipBase = priorRestoredBase + batchRestoredBase;
+
       let baseToRestore = ret.soLuongTra * line.tyLeQuyDoi;
+      inBatchRestoredBase.set(ret.maChiTietHoaDon, batchRestoredBase + baseToRestore);
+
       const pbs = memoryStore.data.allocations
         .filter((a) => a.maChiTietHoaDon === line.maChiTietHoaDon)
         .reverse();
 
       for (const pb of pbs) {
         if (baseToRestore <= 0) break;
-        const take = Math.min(pb.soLuongXuat, baseToRestore);
+        const alreadyRestoredFromPb = Math.min(pb.soLuongXuat, skipBase);
+        skipBase -= alreadyRestoredFromPb;
+        const remainingCapacity = pb.soLuongXuat - alreadyRestoredFromPb;
+        if (remainingCapacity <= 0) continue;
+
+        const take = Math.min(remainingCapacity, baseToRestore);
         baseToRestore -= take;
-
-        const lot = memoryStore.data.importDetails.find(
-          (l) => l.maChiTietNhap === pb.maChiTietNhap
-        );
-        if (lot) lot.soLuongCon += take;
+        plannedLotDeltas.set(pb.maChiTietNhap, (plannedLotDeltas.get(pb.maChiTietNhap) || 0) + take);
       }
 
-      const prod = memoryStore.data.products.find((p) => p.maSanPham === line.maSanPham);
-      if (prod) {
-        prod.soLuongTon += ret.soLuongTra * line.tyLeQuyDoi;
-      }
+      plannedProdDeltas.set(
+        line.maSanPham,
+        (plannedProdDeltas.get(line.maSanPham) || 0) + ret.soLuongTra * line.tyLeQuyDoi
+      );
     }
   }
 
@@ -2052,8 +2236,15 @@ export async function createExchangeReturn(payload: {
     if (!prod) throw new Error('Sản phẩm đổi không hợp lệ');
 
     const totalBaseNeeded = ex.soLuong * unit.heSoQuyDoi;
-    const lots = await getSellableInventoryLots(ex.maSanPham);
-    const totalAvailable = lots.reduce((acc, l) => acc + l.soLuongCon, 0);
+    const rawLots = await getSellableInventoryLots(ex.maSanPham);
+    const lotsWithPlanned = rawLots
+      .map((l) => ({
+        ...l,
+        soLuongCon: l.soLuongCon + (plannedLotDeltas.get(l.maChiTietNhap) || 0),
+      }))
+      .filter((l) => l.soLuongCon > 0);
+
+    const totalAvailable = lotsWithPlanned.reduce((acc, l) => acc + l.soLuongCon, 0);
     if (totalAvailable < totalBaseNeeded) {
       throw new Error('Không đủ số lượng hàng có thể bán');
     }
@@ -2061,7 +2252,7 @@ export async function createExchangeReturn(payload: {
     const thanhTienDoi = ex.soLuong * Number(unit.giaBan);
     tongTienHangDoi += thanhTienDoi;
 
-    const ctdId = `CTD${String(memoryStore.data.exchangeReturnDetails.length + detailsToCreate.length + 1).padStart(4, '0')}`;
+    const ctdId = formatCode('CTD', nextCtdNum++, 4);
     detailsToCreate.push({
       maChiTiet: ctdId,
       maPhieuDoiTra,
@@ -2079,17 +2270,14 @@ export async function createExchangeReturn(payload: {
     });
 
     let needed = totalBaseNeeded;
-    for (const lot of lots) {
+    for (const lot of lotsWithPlanned) {
       if (needed <= 0) break;
       const take = Math.min(lot.soLuongCon, needed);
       needed -= take;
 
-      const storeLot = memoryStore.data.importDetails.find(
-        (l) => l.maChiTietNhap === lot.maChiTietNhap
-      );
-      if (storeLot) storeLot.soLuongCon -= take;
+      plannedLotDeltas.set(lot.maChiTietNhap, (plannedLotDeltas.get(lot.maChiTietNhap) || 0) - take);
 
-      const pbId = `PB${String(memoryStore.data.allocations.length + allocationsToCreate.length + 1).padStart(4, '0')}`;
+      const pbId = formatCode('PB', nextPbNum++, 4);
       allocationsToCreate.push({
         maPhanBo: pbId,
         maChiTietNhap: lot.maChiTietNhap,
@@ -2099,8 +2287,21 @@ export async function createExchangeReturn(payload: {
       });
     }
 
-    prod.soLuongTon -= totalBaseNeeded;
+    plannedProdDeltas.set(
+      ex.maSanPham,
+      (plannedProdDeltas.get(ex.maSanPham) || 0) - totalBaseNeeded
+    );
   }
+
+  // Apply planned deltas after all validations pass
+  plannedLotDeltas.forEach((delta, lotId) => {
+    const lot = memoryStore.data.importDetails.find((l) => l.maChiTietNhap === lotId);
+    if (lot) lot.soLuongCon += delta;
+  });
+  plannedProdDeltas.forEach((delta, prodId) => {
+    const prod = memoryStore.data.products.find((p) => p.maSanPham === prodId);
+    if (prod) prod.soLuongTon += delta;
+  });
 
   const tienChenhLech = tongTienHangDoi - tongTienHangTra;
   const phieu = {
@@ -2117,7 +2318,17 @@ export async function createExchangeReturn(payload: {
   memoryStore.data.exchangeReturnDetails.push(...detailsToCreate);
   memoryStore.data.allocations.push(...allocationsToCreate);
 
-  return { success: true, phieu };
+  const responseData = { success: true, phieu };
+  if (payload.idempotencyKey) {
+    if (!(memoryStore.data as any).idempotency) (memoryStore.data as any).idempotency = [];
+    (memoryStore.data as any).idempotency.push({
+      key: payload.idempotencyKey,
+      action: 'EXCHANGE_RETURN',
+      response: JSON.stringify(responseData),
+    });
+  }
+
+  return responseData;
 }
 
 // ==========================================

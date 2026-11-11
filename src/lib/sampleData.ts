@@ -269,7 +269,7 @@ export function generateSampleData(): InitialData {
       maPhieuNhap: 'PN0002',
       maNhaCungCap: 'NCC002',
       ngayNhap: d(-15),
-      tongTien: 430000,
+      tongTien: 454000,
     },
     {
       maPhieuNhap: 'PN0003',
@@ -326,10 +326,10 @@ export function generateSampleData(): InitialData {
       maSanPham: 'SP0004',
       maDonViNhap: 'DV0010', // Chai
       tyLeQuyDoi: 1,
-      soLuongNhap: 20,
-      soLuongCon: 20, // 20 chai ĐÃ HẾT HẠN
+      soLuongNhap: 26,
+      soLuongCon: 20, // Đã bán 6 chai ở HD0001, còn 20 chai ĐÃ HẾT HẠN
       giaNhap: 4000,
-      thanhTien: 80000,
+      thanhTien: 104000,
       hanSuDung: d(-5), // ĐÃ HẾT HẠN
     },
     // PN0003
@@ -380,10 +380,10 @@ export function generateSampleData(): InitialData {
       maHoaDon: 'HD0001',
       maKhachHang: 'KH0001',
       ngayGioBan: d(-5),
-      tongTien: 173000,
+      tongTien: 181000,
       phuongThucThanhToan: 'Tiền mặt',
       tienKhachDua: 200000,
-      tienThua: 27000,
+      tienThua: 19000,
       trangThai: 'Đã thanh toán',
       lyDoHuy: null,
       thoiGianHuy: null,
@@ -502,6 +502,13 @@ export function generateSampleData(): InitialData {
       maChiTietHoaDon: 'CTH002',
       maChiTietDoiTra: null,
       soLuongXuat: 8, // 8 hộp
+    },
+    {
+      maPhanBo: 'PB0005',
+      maChiTietNhap: 'CTN004',
+      maChiTietHoaDon: 'CTH003',
+      maChiTietDoiTra: null,
+      soLuongXuat: 6, // 6 chai
     },
     // HD0003
     {

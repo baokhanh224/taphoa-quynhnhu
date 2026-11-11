@@ -4,46 +4,47 @@ datasource db {
 }
 
 generator client {
-  provider = "prisma-client-js"
-  output   = "../src/generated/client"
+  provider      = "prisma-client-js"
+  output        = "../src/generated/client"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 model TaiKhoan {
-  maTaiKhoan  String @id @db.VarChar(6)
+  maTaiKhoan  String @id @db.VarChar(20)
   tenDangNhap String @unique @db.VarChar(50)
   matKhau     String @db.VarChar(250)
 }
 
 model DanhMucSanPham {
-  maDanhMuc  String    @id @db.VarChar(6)
-  tenDanhMuc String    @db.VarChar(50)
+  maDanhMuc  String    @id @db.VarChar(20)
+  tenDanhMuc String    @db.VarChar(100)
   sanPhams   SanPham[]
 }
 
 model NhaCungCap {
-  maNhaCungCap  String          @id @db.VarChar(6)
-  tenNhaCungCap String          @db.VarChar(100)
-  soDienThoai   String          @db.VarChar(10)
+  maNhaCungCap  String          @id @db.VarChar(20)
+  tenNhaCungCap String          @db.VarChar(150)
+  soDienThoai   String          @db.VarChar(20)
   email         String?         @db.VarChar(250)
   diaChi        String?         @db.VarChar(250)
-  danhMuc       String?         @db.VarChar(20)
-  trangThai     String          @default("Đang hợp tác") @db.VarChar(20)
-  moTa          String?         @db.VarChar(250)
+  danhMuc       String?         @db.VarChar(100)
+  trangThai     String          @default("Đang hợp tác") @db.VarChar(50)
+  moTa          String?         @db.VarChar(500)
   phieuNhaps    PhieuNhapHang[]
 }
 
 model SanPham {
-  maSanPham       String                 @id @db.VarChar(6)
-  tenSanPham      String                 @db.VarChar(100)
-  maDanhMuc       String                 @db.VarChar(6)
+  maSanPham       String                 @id @db.VarChar(20)
+  tenSanPham      String                 @db.VarChar(150)
+  maDanhMuc       String                 @db.VarChar(20)
   maVach          String?                @db.VarChar(50)
-  donViTinh       String                 @db.VarChar(20)
+  donViTinh       String                 @db.VarChar(50)
   giaNhapBinhQuan Decimal                @default(0) @db.Decimal(18, 2)
   soLuongTon      Int                    @default(0)
   mucTonToiThieu  Int                    @default(0)
   quanLyHanSuDung Boolean                @default(false)
-  trangThai       String                 @default("Đang kinh doanh") @db.VarChar(20)
-  moTa            String?                @db.VarChar(250)
+  trangThai       String                 @default("Đang kinh doanh") @db.VarChar(50)
+  moTa            String?                @db.VarChar(500)
 
   danhMuc         DanhMucSanPham         @relation(fields: [maDanhMuc], references: [maDanhMuc])
   donViQuyDois    DonViQuyDoi[]
@@ -54,8 +55,8 @@ model SanPham {
 }
 
 model DonViQuyDoi {
-  maDonVi     String            @id @db.VarChar(6)
-  maSanPham   String            @db.VarChar(6)
+  maDonVi     String            @id @db.VarChar(20)
+  maSanPham   String            @db.VarChar(20)
   tenDonVi    String            @db.VarChar(50)
   heSoQuyDoi  Int
   giaBan      Decimal           @db.Decimal(18, 2)
@@ -68,8 +69,8 @@ model DonViQuyDoi {
 }
 
 model LichSuGiaBan {
-  maLichSu        String      @id @db.VarChar(6)
-  maDonVi         String      @db.VarChar(6)
+  maLichSu        String      @id @db.VarChar(20)
+  maDonVi         String      @db.VarChar(20)
   giaCu           Decimal     @db.Decimal(18, 2)
   giaMoi          Decimal     @db.Decimal(18, 2)
   thoiDiemThayDoi DateTime    @default(now())
@@ -78,8 +79,8 @@ model LichSuGiaBan {
 }
 
 model PhieuNhapHang {
-  maPhieuNhap  String            @id @db.VarChar(6)
-  maNhaCungCap String            @db.VarChar(6)
+  maPhieuNhap  String            @id @db.VarChar(20)
+  maNhaCungCap String            @db.VarChar(20)
   ngayNhap     DateTime          @default(now())
   tongTien     Decimal           @db.Decimal(18, 2)
 
@@ -88,10 +89,10 @@ model PhieuNhapHang {
 }
 
 model ChiTietNhapHang {
-  maChiTietNhap   String                 @id @db.VarChar(6)
-  maPhieuNhap     String                 @db.VarChar(6)
-  maSanPham       String                 @db.VarChar(6)
-  maDonViNhap     String                 @db.VarChar(6)
+  maChiTietNhap   String                 @id @db.VarChar(20)
+  maPhieuNhap     String                 @db.VarChar(20)
+  maSanPham       String                 @db.VarChar(20)
+  maDonViNhap     String                 @db.VarChar(20)
   tyLeQuyDoi      Int
   soLuongNhap     Int
   soLuongCon      Int                    @default(0) // Số lượng còn (tính theo đơn vị cơ sở)
@@ -107,12 +108,12 @@ model ChiTietNhapHang {
 }
 
 model PhieuDieuChinhTonKho {
-  maPhieuDieuChinh String          @id @db.VarChar(6)
-  maSanPham        String          @db.VarChar(6)
-  maChiTietNhap    String          @db.VarChar(6)
+  maPhieuDieuChinh String          @id @db.VarChar(20)
+  maSanPham        String          @db.VarChar(20)
+  maChiTietNhap    String          @db.VarChar(20)
   ngayDieuChinh    DateTime        @default(now())
   soLuongCu        Int
-  soLuongMoi        Int
+  soLuongMoi       Int
   lyDo             String          @db.VarChar(250)
   chenhLech        Int
 
@@ -121,23 +122,23 @@ model PhieuDieuChinhTonKho {
 }
 
 model KhachHang {
-  maKhachHang String    @id @db.VarChar(6)
-  tenKhachHang String   @db.VarChar(50)
-  soDienThoai String    @unique @db.VarChar(10)
-  diaChi      String?   @db.VarChar(250)
+  maKhachHang  String   @id @db.VarChar(20)
+  tenKhachHang String   @db.VarChar(100)
+  soDienThoai  String   @unique @db.VarChar(20)
+  diaChi       String?  @db.VarChar(250)
 
-  hoaDons     HoaDon[]
+  hoaDons      HoaDon[]
 }
 
 model HoaDon {
-  maHoaDon            String          @id @db.VarChar(6)
-  maKhachHang         String?         @db.VarChar(6)
+  maHoaDon            String          @id @db.VarChar(20)
+  maKhachHang         String?         @db.VarChar(20)
   ngayGioBan          DateTime        @default(now())
   tongTien            Decimal         @db.Decimal(18, 2)
-  phuongThucThanhToan String          @db.VarChar(20)
+  phuongThucThanhToan String          @db.VarChar(50)
   tienKhachDua        Decimal?        @db.Decimal(18, 2)
   tienThua            Decimal?        @db.Decimal(18, 2)
-  trangThai           String          @default("Đã thanh toán") @db.VarChar(20)
+  trangThai           String          @default("Đã thanh toán") @db.VarChar(50)
   lyDoHuy             String?         @db.VarChar(250)
   thoiGianHuy         DateTime?
 
@@ -147,10 +148,10 @@ model HoaDon {
 }
 
 model ChiTietHoaDon {
-  maChiTietHoaDon String          @id @db.VarChar(6)
-  maHoaDon        String          @db.VarChar(6)
-  maSanPham       String          @db.VarChar(6)
-  maDonViBan      String          @db.VarChar(6)
+  maChiTietHoaDon String          @id @db.VarChar(20)
+  maHoaDon        String          @db.VarChar(20)
+  maSanPham       String          @db.VarChar(20)
+  maDonViBan      String          @db.VarChar(20)
   tyLeQuyDoi      Int
   soLuong         Int
   donGia          Decimal         @db.Decimal(18, 2)
@@ -165,26 +166,26 @@ model ChiTietHoaDon {
 }
 
 model PhieuDoiTra {
-  maPhieuDoiTra   String          @id @db.VarChar(6)
-  maHoaDon        String          @db.VarChar(6)
+  maPhieuDoiTra   String          @id @db.VarChar(20)
+  maHoaDon        String          @db.VarChar(20)
   ngayGioDoiTra   DateTime        @default(now())
   tongTienHangTra Decimal         @db.Decimal(18, 2)
   tongTienHangDoi Decimal         @db.Decimal(18, 2)
   tienChenhLech   Decimal         @db.Decimal(18, 2)
-  trangThai       String          @default("Hoàn tất") @db.VarChar(20)
+  trangThai       String          @default("Hoàn tất") @db.VarChar(50)
 
   hoaDon          HoaDon          @relation(fields: [maHoaDon], references: [maHoaDon])
   chiTietDoiTras  ChiTietDoiTra[]
 }
 
 model ChiTietDoiTra {
-  maChiTiet       String          @id @db.VarChar(6)
-  maPhieuDoiTra   String          @db.VarChar(6)
-  maChiTietHoaDon String?         @db.VarChar(6)
-  maDonVi         String          @db.VarChar(6)
-  maSanPham       String          @db.VarChar(6)
-  maPhanBo        String?         @db.VarChar(6)
-  loaiDong        String          @db.VarChar(20) // "Hàng trả", "Hàng đổi"
+  maChiTiet       String          @id @db.VarChar(20)
+  maPhieuDoiTra   String          @db.VarChar(20)
+  maChiTietHoaDon String?         @db.VarChar(20)
+  maDonVi         String          @db.VarChar(20)
+  maSanPham       String          @db.VarChar(20)
+  maPhanBo        String?         @db.VarChar(20)
+  loaiDong        String          @db.VarChar(50) // "Hàng trả", "Hàng đổi"
   tyLeQuyDoi      Int
   soLuong         Int
   donGia          Decimal         @db.Decimal(18, 2)
@@ -200,10 +201,10 @@ model ChiTietDoiTra {
 }
 
 model PhanBoXuatKho {
-  maPhanBo        String           @id @db.VarChar(6)
-  maChiTietNhap   String           @db.VarChar(6)
-  maChiTietHoaDon String?          @db.VarChar(6)
-  maChiTietDoiTra String?          @db.VarChar(6)
+  maPhanBo        String           @id @db.VarChar(20)
+  maChiTietNhap   String           @db.VarChar(20)
+  maChiTietHoaDon String?          @db.VarChar(20)
+  maChiTietDoiTra String?          @db.VarChar(20)
   soLuongXuat     Int // Số lượng xuất (theo đơn vị cơ sở)
 
   chiTietNhap     ChiTietNhapHang  @relation(fields: [maChiTietNhap], references: [maChiTietNhap])
